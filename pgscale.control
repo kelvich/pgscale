@@ -1,0 +1,4 @@
+comment = 'pgscale'
+default_version = '1.0'
+module_pathname = '$libdir/pgscale'
+relocatable = true
