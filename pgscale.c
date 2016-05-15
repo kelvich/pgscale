@@ -20,7 +20,10 @@
 PG_MODULE_MAGIC;
 #endif
 
-#define REQEST_MAX_SIZE 1024
+#define MAX_REQEST_SIZE 1024
+#define MAX_PGVIEW_LEN 40
+#define MAX_REQUEST_URI_LEN 100
+#define MAX_PATH_LEN 200
 
 PG_FUNCTION_INFO_V1(pgscale_start);
 PG_FUNCTION_INFO_V1(pgscale_stop);
@@ -104,6 +107,9 @@ static StringInfo
 pgscale_http_handle_request(char *buf, int len) {
 	StringInfo response = makeStringInfo();
 
+	char static_path[MAX_PATH_LEN] = "/Users/stas/code/pgscale/static";
+	int fd;
+
 	/* rfc2616 grammar tokens */
 	char *request_line, *method, *request_uri; 
 
@@ -112,7 +118,7 @@ pgscale_http_handle_request(char *buf, int len) {
 	 * following headers and possible message-body.
 	 */
 	request_line = strsep(&buf, "\r\n");
-	// XXX: add some checks for malformed request
+
 	fprintf(stderr, "request_line: '%s'\n", request_line);
 
 	method = strsep(&request_line, " ");
@@ -125,6 +131,19 @@ pgscale_http_handle_request(char *buf, int len) {
 	if (strcmp(method, "GET"))
 	{
 		appendStringInfo(response, "HTTP/1.1 501 Not Implemented\r\n\r\n");
+		return response;
+	}
+
+	/* Verify GET line */
+	if (!request_uri || (strlen(request_uri) == 0))
+	{
+		// XXX: fix ret codes
+		appendStringInfo(response, "HTTP/1.1 500 Malformed request\r\n\r\n");
+		return response;
+	}
+	else if (strlen(request_uri) > MAX_REQUEST_URI_LEN)
+	{
+		appendStringInfo(response, "HTTP/1.1 500 Entity too large\r\n\r\n");
 		return response;
 	}
 
@@ -150,6 +169,30 @@ pgscale_http_handle_request(char *buf, int len) {
 	/*
 	 * Here we assume that request_uri is path to file.
 	 */
+
+	if (strcmp(request_uri, "/") == 0)
+	{
+		request_uri = (char *) (sizeof "/index.html");
+		request_uri = "/index.html";
+	}
+
+	strncat(static_path, request_uri, sizeof(static_path) - strlen(static_path) - 1);
+
+	if ( (fd = open(static_path, O_RDONLY)) != -1)
+	{
+		char data_to_send[1024];
+		int bytes_read;
+
+		fprintf(stderr, "Sending file %s\n", static_path);
+
+		appendStringInfo(response, "HTTP/1.1 200 OK\r\n\r\n");
+		while ( (bytes_read = read(fd, data_to_send, 1024)) > 0 )
+			appendBinaryStringInfo(response, data_to_send, bytes_read);
+
+		appendStringInfo(response, "\r\n\r\n");
+		return response;
+	}
+
 	appendStringInfo(response, "HTTP/1.1 404 Not found\r\n\r\n");
 	return response;
 }
@@ -159,6 +202,7 @@ pgscale_http_main(Datum arg)
 {
 	int s, cli_fd;
 	int err;
+	int on = 1;
 	socklen_t addr_size;
 	struct sockaddr_in sa;
 	struct sockaddr_storage their_addr;
@@ -174,6 +218,8 @@ pgscale_http_main(Datum arg)
 		printf("Socket error.\n");
 		proc_exit(1);
 	}
+
+	setsockopt(s, SOL_SOCKET, SO_REUSEADDR, (char*)&on, sizeof on);
 
 	sa.sin_family = AF_INET;
 	sa.sin_port = htons(1137);
@@ -192,7 +238,7 @@ pgscale_http_main(Datum arg)
 
 	while (1) {
 		StringInfo msg = makeStringInfo();
-		char buf[REQEST_MAX_SIZE];
+		char buf[MAX_REQEST_SIZE];
 		int bytes_sent, bytes_recv;
 
 		addr_size = sizeof their_addr;
@@ -200,10 +246,10 @@ pgscale_http_main(Datum arg)
 		printf("Somebody connected\n");
 
 		/*
-		 * Here I assume that request fit REQEST_MAX_SIZE.
+		 * Here I assume that request fit MAX_REQEST_SIZE.
 		 * Probably socket should be read until '\r\n\r\n' sequense is found.
 		 */
-		bytes_recv = recv(cli_fd, buf, REQEST_MAX_SIZE, 0);
+		bytes_recv = recv(cli_fd, buf, MAX_REQEST_SIZE, 0);
 		if (bytes_recv < 0) {
 			printf("Can't receive. %s\n", strerror(errno));
 		}
