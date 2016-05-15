@@ -88,10 +88,13 @@ pgscale_run_sql(char *pg_view_name, StringInfo response) {
 
 			appendStringInfo(response, "{");
 			for (i = 1; i <= tupdesc->natts; i++)
-				appendStringInfo(response,
-					"%s : %s, ", SPI_fname(tupdesc, i), SPI_getvalue(tuple, tupdesc, i));
+				appendStringInfo(response, "\"%s\" : \"%s\", ",
+					SPI_fname(tupdesc, i), SPI_getvalue(tuple, tupdesc, i));
+			response->len = response->len - 2; /* get rid of last comma */
 			appendStringInfo(response, "}, ");
 		}
+		response->len = response->len - 2; /* get rid of last comma */
+
 		appendStringInfo(response, "]");
 	}
 
